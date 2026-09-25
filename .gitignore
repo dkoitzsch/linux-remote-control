@@ -1,0 +1,16 @@
+# Build outputs
+/bin/
+web/dist/
+web/node_modules/
+agent/internal/webui/dist/*
+!agent/internal/webui/dist/index.html
+
+# Go
+agent/*.db
+agent/*.db-*
+
+# Local test/runtime artifacts that should never be committed
+*.pem
+*.key
+helper.token
+/data/

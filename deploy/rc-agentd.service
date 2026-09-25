@@ -1,0 +1,20 @@
+[Unit]
+Description=linux-remote-control agent daemon (privileged system service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rc-agentd -addr :8443 -data-dir /var/lib/rc-agent -socket /run/rc-agent/helper.sock -token-file /etc/rc-agent/helper.token -socket-group rc-agent
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=rc-agent
+RuntimeDirectoryMode=0755
+
+# Runs as root: needs to read every user's /proc entries, send signals to
+# arbitrary PIDs, capture raw network traffic, and call `systemctl
+# poweroff`. Not sandboxed further for that reason.
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=rc-helper
+Comment=linux-remote-control session helper (screen capture, notifications)
+Exec=/usr/local/bin/rc-helper
+Icon=utilities-terminal
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-phase=1

@@ -1,0 +1,19 @@
+[Unit]
+Description=linux-remote-control session helper (runs as the child's user)
+# Requires DISPLAY/XAUTHORITY to already be imported into the systemd --user
+# environment (KDE/SDDM does this via Plasma's session startup on most
+# Fedora setups, but not universally). If rc-helper logs "x11win: connect:
+# ..." errors, prefer the autostart .desktop entry instead -- see
+# deploy/rc-helper.desktop and the README. That's the default install.sh
+# uses because it needs no environment-import guesswork.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rc-helper
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
