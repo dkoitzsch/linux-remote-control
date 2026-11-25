@@ -1,84 +1,84 @@
 # linux-remote-control
 
-Ein selbstgehostetes Eltern-Kontrollportal für einen Fedora/KDE-Rechner im
-eigenen Heimnetz: Bildschirmansicht, Prozessliste mit Filtern, Prozesse
-beenden, eine "auf oberster Ebene bestehende" Nachricht anzeigen, und einen
-geplanten Shutdown mit Countdown-Fenster auslösen – alles über einen Browser
-mit rollenbasiertem Login (Vollzugriff / Betrachter).
+A self-hosted parental control portal for a Fedora/KDE machine on your own
+home network: screen view, filterable process list, process termination, a
+"stays on top until acknowledged" message, and a scheduled shutdown with a
+countdown window — all from a browser, with role-based login (Full
+Access / Viewer).
 
-## Architektur
+## Architecture
 
 ```
-┌──────────────────────┐        HTTPS (LAN, Port 8443)        ┌───────────────────────────────────────┐
-│  Browser (Eltern-PC)  │ ───────────────────────────────────▶ │  rc-agentd (root, systemd-Systemdienst) │
-└──────────────────────┘                                       │  - Auth/Sessions (SQLite)               │
-                                                                 │  - Prozessliste (gopsutil) + Netzwerk-  │
-                                                                 │    Monitor pro Prozess (libpcap)        │
-                                                                 │  - HTTP-API + eingebettetes Web-Portal  │
+┌──────────────────────┐        HTTPS (LAN, port 8443)        ┌───────────────────────────────────────┐
+│  Browser (parent PC)  │ ───────────────────────────────────▶ │  rc-agentd (root, systemd system svc)   │
+└──────────────────────┘                                       │  - Auth/sessions (SQLite)               │
+                                                                 │  - Process list (gopsutil) + per-       │
+                                                                 │    process network monitor (libpcap)    │
+                                                                 │  - HTTP API + embedded web portal       │
                                                                  └───────────────┬─────────────────────────┘
-                                                                                 │ Unix-Socket (IPC, token-
-                                                                                 │ authentifiziert)
+                                                                                 │ Unix socket (IPC, token-
+                                                                                 │ authenticated)
                                                                                  ▼
                                                                  ┌───────────────────────────────────────┐
-                                                                 │  rc-helper (Kind-Benutzer, KDE-Autostart)│
-                                                                 │  - Screenshot/Stream via X11             │
-                                                                 │  - Fenster→PID-Zuordnung (EWMH)          │
-                                                                 │  - startet rc-overlay für Popups         │
+                                                                 │  rc-helper (child's user, KDE autostart)│
+                                                                 │  - Screenshot/stream via X11             │
+                                                                 │  - Window→PID mapping (EWMH)             │
+                                                                 │  - launches rc-overlay for popups        │
                                                                  └───────────────┬─────────────────────────┘
-                                                                                 │ Subprozess
+                                                                                 │ subprocess
                                                                                  ▼
                                                                  ┌───────────────────────────────────────┐
-                                                                 │  rc-overlay (Fyne, Vollbild, non-       │
-                                                                 │  dismissable): Nachricht "Verstanden"   │
-                                                                 │  oder Shutdown-Countdown                │
+                                                                 │  rc-overlay (Fyne, fullscreen, non-     │
+                                                                 │  dismissable): "Acknowledged" message   │
+                                                                 │  or shutdown countdown                   │
                                                                  └───────────────────────────────────────┘
 ```
 
-**Warum zwei Prozesse auf dem Kind-PC?** `rc-agentd` läuft als root-Systemdienst
-und hat deshalb *keinen* Zugriff auf die grafische Sitzung des Kindes (kein
-`DISPLAY`, keine X11-Rechte). Alles, was den Bildschirm sehen oder ein Fenster
-zeigen muss, läuft deshalb als `rc-helper` *innerhalb* der KDE-Sitzung des
-Kindes und spricht über einen lokalen, mit einem Token abgesicherten
-Unix-Socket mit `rc-agentd`. `rc-agentd` bleibt für alles verantwortlich, was
-Root-Rechte braucht (Prozesse beenden, Netzwerk-Mitschnitt, Herunterfahren).
+**Why two processes on the child's PC?** `rc-agentd` runs as a root system
+service and therefore has *no* access to the child's graphical session (no
+`DISPLAY`, no X11 permissions). Anything that needs to see the screen or
+show a window therefore runs as `rc-helper` *inside* the child's KDE session
+and talks to `rc-agentd` over a local, token-secured Unix socket.
+`rc-agentd` stays responsible for everything that needs root privileges
+(killing processes, network capture, shutting down).
 
-**Nur Heimnetz:** Der Browser verbindet sich direkt und ausschließlich per LAN
-mit `rc-agentd` (selbstsigniertes TLS-Zertifikat, einmalige Warnung im
-Browser). Für Zugriff von unterwegs wird kein zusätzlicher Relay-Server
-mitgeliefert – dafür eignet sich ein VPN (z.B. WireGuard) ins Heimnetz.
+**LAN only:** the browser connects directly and exclusively over the LAN to
+`rc-agentd` (self-signed TLS certificate, one-time warning in the browser).
+No relay server is included for access from outside the home network — a
+VPN (e.g. WireGuard) into the home network is the recommended way to do
+that.
 
-### Warum ein `<img>`-Tag als "Video"?
+### Why an `<img>` tag as "video"?
 
-Bildschirmübertragung läuft als MJPEG-Stream (`multipart/x-mixed-replace`)
-über eine ganz normale HTTP-Verbindung, die ein `<img src="/api/stream">` im
-Browser nativ abspielt. Das deckt sowohl "einzelne Screenshots" (`GET
-/api/screenshot`) als auch "Videostream" mit einem einzigen, sehr einfachen
-Mechanismus ab – kein WebRTC/WebSocket-Video-Stack nötig.
+Screen transmission runs as an MJPEG stream (`multipart/x-mixed-replace`)
+over a perfectly normal HTTP connection, which an `<img src="/api/stream">`
+plays natively in the browser. That covers both "single screenshots" (`GET
+/api/screenshot`) and "video stream" with one single, very simple
+mechanism — no WebRTC/WebSocket video stack needed.
 
-### Wie wird "System-Dienst" vs. "Programm mit UI" erkannt?
+### How is "system service" vs. "program with UI" detected?
 
-- **Programm mit UI**: `rc-helper` fragt den Fenstermanager (KWin) über das
-  EWMH-Property `_NET_CLIENT_LIST` nach allen Top-Level-Fenstern und deren
-  PID (`_NET_WM_PID`). Jeder Prozess mit einem zugeordneten Fenster gilt als
-  GUI-Programm.
-- **System-Dienst**: `rc-agentd` liest `/proc/<pid>/cgroup` und erkennt
-  Prozesse, die systemd unter `system.slice` als `.service`-Unit gestartet
-  hat.
+- **Program with UI**: `rc-helper` asks the window manager (KWin) via the
+  EWMH property `_NET_CLIENT_LIST` for all top-level windows and their PID
+  (`_NET_WM_PID`). Any process with a mapped window counts as a GUI
+  program.
+- **System service**: `rc-agentd` reads `/proc/<pid>/cgroup` and detects
+  processes systemd started as a `.service` unit under `system.slice`.
 
-Ein Prozess kann keins von beidem sein (z.B. ein Hintergrundprozess einer
-Anwendung ohne eigenes Fenster) – im Portal als "Sonstige" filterbar.
+A process can be neither (e.g. a background process of an application with
+no window of its own) — filterable in the portal as "Other".
 
-### Wie wird Netzwerkverkehr pro Prozess gemessen?
+### How is network traffic measured per process?
 
-Wie bei `nethogs`: `rc-agentd` liest periodisch `/proc/net/{tcp,udp}[6]` und
-`/proc/<pid>/fd/*`, um lokale Ports auf PIDs abzubilden, und zählt per
-`libpcap`-Mitschnitt (`tcp or udp` auf allen Interfaces) die Byte-Länge jedes
-Pakets auf den passenden lokalen Port. Das ist eine Näherung (kein
-Kernel-eBPF-Accounting), aber ausreichend genau für ein Eltern-Dashboard.
-Falls `libpcap` nicht verfügbar ist, läuft der Rest des Systems trotzdem
-weiter – nur ohne Netzwerkspalten.
+Like `nethogs`: `rc-agentd` periodically reads `/proc/net/{tcp,udp}[6]` and
+`/proc/<pid>/fd/*` to map local ports to PIDs, and counts the byte length of
+every packet on the matching local port via a `libpcap` capture (`tcp or
+udp` on all interfaces). This is an approximation (no kernel eBPF
+accounting), but accurate enough for a parental dashboard. If `libpcap`
+isn't available, the rest of the system still works — just without the
+network columns.
 
-## Voraussetzungen auf dem Fedora/KDE-Rechner (Kind-PC)
+## Prerequisites on the Fedora/KDE machine (child's PC)
 
 ```sh
 sudo dnf install -y golang gcc pkgconf-pkg-config \
@@ -86,83 +86,89 @@ sudo dnf install -y golang gcc pkgconf-pkg-config \
   mesa-libGL-devel libX11-devel libXcursor-devel libXrandr-devel \
   libXinerama-devel libXi-devel libXxf86vm-devel \
   wayland-devel libxkbcommon-devel
-sudo dnf install -y nodejs npm   # nur zum Bauen des Frontends
+sudo dnf install -y nodejs npm   # only needed to build the frontend
 ```
 
-(`rc-overlay` nutzt Fyne/OpenGL für die Vollbild-Overlays, `rc-agentd`s
-Netzwerk-Monitor nutzt libpcap – beides braucht Cgo und die genannten
-Dev-Pakete. Am einfachsten direkt auf dem Zielrechner bauen, siehe unten.)
+(`rc-overlay` uses Fyne/OpenGL for the fullscreen overlays, `rc-agentd`'s
+network monitor uses libpcap — both need Cgo and the dev packages listed
+above. Easiest to just build directly on the target machine, see below.)
 
 ## Installation
 
-Alles wird **auf dem Fedora-Rechner des Kindes** gebaut und installiert:
+Everything is built and installed **on the child's Fedora machine**:
 
 ```sh
-git clone <dieses-repo> linux-remote-control
+git clone <this-repo> linux-remote-control
 cd linux-remote-control
-sudo ./deploy/install.sh --child-user <linux-benutzername-des-kindes>
+sudo ./deploy/install.sh --child-user <child's-linux-username>
 ```
 
-Das Skript baut Frontend + Agent (`make all`), installiert die Binaries nach
-`/usr/local/bin`, richtet die Gruppe `rc-agent` ein (damit `rc-helper` als
-Kind-Benutzer den privilegierten Socket erreichen darf), installiert und
-startet den systemd-Dienst `rc-agentd`, und legt einen KDE-Autostart-Eintrag
-für `rc-helper` an.
+The script builds the frontend + agent (`make all`), installs the binaries
+to `/usr/local/bin`, sets up the `rc-agent` group (so `rc-helper`, running
+as the child's user, can reach the privileged socket), installs and starts
+the `rc-agentd` systemd service, and creates a KDE autostart entry for
+`rc-helper`.
 
-Danach:
+Afterwards:
 
 ```sh
-# Ersten Vollzugriff-Account anlegen (interaktiv, fragt nach Passwort):
-sudo rc-agentctl create-user -username eltern -role full
+# Create the first full-access account (interactive, prompts for a password):
+sudo rc-agentctl create-user -username parent -role full
 
-# Weitere Accounts:
-sudo rc-agentctl create-user -username kind-betrachter -role viewer
+# Additional accounts:
+sudo rc-agentctl create-user -username child-viewer -role viewer
 sudo rc-agentctl list-users
 ```
 
-Das Kind muss sich einmal ab- und wieder anmelden (neue Gruppenmitgliedschaft
-+ KDE-Autostart). Danach im Browser auf dem Eltern-PC (gleiches Heimnetz):
+The child needs to log out and back in once (for the new group membership
+and the KDE autostart entry to take effect). Then, in a browser on the
+parent's PC (same home network):
 
 ```
-https://<hostname-oder-ip-des-kind-pcs>:8443
+https://<hostname-or-ip-of-the-childs-pc>:8443
 ```
 
-Der Browser zeigt beim ersten Aufruf eine Zertifikatswarnung
-(selbstsigniertes Zertifikat, kein externer CA nötig) – einmalig bestätigen.
+The browser will show a certificate warning on first use (self-signed
+certificate, no external CA needed) — confirm it once.
 
-## Rollen
+## Roles
 
-- **Vollzugriff**: Bildschirm ansehen, Prozessliste ansehen/filtern/beenden,
-  Nachricht senden, Herunterfahren planen/abbrechen, Accounts verwalten.
-- **Betrachter**: nur Bildschirm ansehen + Prozessliste ansehen/filtern.
+- **Full access**: view the screen, view/filter/terminate processes, send
+  messages, schedule/cancel shutdown, manage accounts.
+- **Viewer**: view the screen + view/filter processes only.
 
-## Entwicklung
+## Development
 
 ```sh
-# Backend (Go) bauen und testen:
+# Build and test the backend (Go):
 cd agent && go build ./... && go vet ./...
 
-# Frontend mit Live-Reload gegen einen lokal laufenden rc-agentd:
+# Frontend with live reload against a locally running rc-agentd:
 cd web && npm install && npm run dev
-# (vite.config.ts proxied /api an https://localhost:8443)
+# (vite.config.ts proxies /api to https://localhost:8443)
 
-# Alles bauen (Frontend + Go-Binaries nach ./bin):
+# Build everything (frontend + Go binaries into ./bin):
 make all
 ```
 
-`rc-agentd` legt beim ersten Start automatisch ein selbstsigniertes
-TLS-Zertifikat unter `<data-dir>/certs/` an. Läuft er lokal ohne Root (z.B.
-zum Testen), einfach einen anderen `-data-dir`/`-socket`/`-token-file` sowie
-einen Port > 1024 via `-addr` angeben.
+`rc-agentd` automatically generates a self-signed TLS certificate under
+`<data-dir>/certs/` on first start. To run it locally without root (e.g. for
+testing), just pass a different `-data-dir`/`-socket`/`-token-file` and a
+port > 1024 via `-addr`.
 
-## Sicherheitshinweise
+## Security notes
 
-- Der Unix-Socket zwischen `rc-agentd` und `rc-helper` ist zusätzlich zu den
-  Dateisystem-Rechten (Gruppe `rc-agent`) mit einem beim ersten Start
-  generierten Token abgesichert (`/etc/rc-agent/helper.token`, nur für root
-  und Gruppe `rc-agent` lesbar).
-- Logins werden pro IP grob gedrosselt (Brute-Force-Bremse).
-- Es gibt bewusst **keine Selbstregistrierung** im Portal – Accounts werden
-  ausschließlich lokal über `rc-agentctl` angelegt.
-- Das letzte verbleibende Vollzugriff-Konto kann nicht gelöscht werden, um
-  ein Aussperren zu verhindern.
+- The Unix socket between `rc-agentd` and `rc-helper` is secured not only by
+  filesystem permissions (the `rc-agent` group) but also by a token
+  generated on first start (`/etc/rc-agent/helper.token`, readable only by
+  root and the `rc-agent` group).
+- Logins are coarsely rate-limited per IP (brute-force throttling).
+- There is deliberately **no self-registration** in the portal — accounts
+  are created exclusively locally via `rc-agentctl`.
+- The last remaining full-access account cannot be deleted, to prevent
+  locking everyone out.
+
+---
+
+🇩🇪 A German version of this document is available in
+[README_DE.md](README_DE.md).
